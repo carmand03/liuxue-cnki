@@ -1,0 +1,1162 @@
+---
+title: "CNKI Scholarship on 留學"
+author: "Cécile Armand"
+affiliation: Ecole Normale Supérieure in Lyon
+date: "`r lubridate::today()`"
+tags: [cnki, scholarship, study abroad, quantitative analysis, biterm topic modeling, semantic network, named entity recognition]  
+abstract: |
+  This document outlines the methodology used for a quantitative analysis of Chinese scholarship on study abroad, retrieved from CNKI in early September 2024. It begins by introducing the data, then examines the metadata, and finally applies various text analysis techniques—tf-idf, biterm topic modeling, and named entity recognition (NER)—to analyze the content of titles.. 
+  
+  <style>
+    body {
+    text-align: justify}
+  </style>
+    
+output: 
+  html_document:
+    toc: true
+    toc_float: 
+      collapsed: false
+      smooth_scroll: false
+    toc_depth: 2
+    number_sections: false
+    code_folding: show # hide
+    fig_caption: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(hrbrthemes)
+library(plotly)
+library(jiebaR)
+library(histtext)
+library(BTM)
+library(widyr)
+library(igraph)
+library(tidygraph)
+library(ggraph)
+library(reshape2)
+library(tidyr)
+library(janitor)
+library(kableExtra)
+
+```
+
+# Introduction
+
+This document presents the methodology used for a quantitative analysis of Chinese scholarship on study abroad, as available on the China National Knowledge Infrastructure [(CNKI)](https://www.cnki.net/index/), the primary database for Chinese scholarly literature today. The query was conducted on September 1, 2024, using the keyword 留学 (*liuxue*) in both the "Title" and "Subject" fields, yielding 2,067 results spanning the period from 1957 to 2024. We analyze these results in detail below.
+
+# CNKI Data
+
+In the first step, we load the list of articles along with related metadata retrieved from CNKI. The dataset comprises 2,067 rows, representing the scholarly works, and 13 columns, corresponding to the metadata variables provided by CNKI. Details of these metadata variables are presented below. The table below displays the first 10 rows, ordered by date of publication. 
+
+```{r message = FALSE, warning = FALSE}
+
+library(readr)
+cnki_liuxue <- read_csv("cnki_liuxue.csv", 
+    col_types = cols(...1 = col_skip()))
+
+
+cnki_liuxue %>% arrange(PubTime)
+
+```
+<br>
+
+
+**Detailed Description of Variables:**
+
+   - **id**: Unique identifier for each "article." This identifier was created by the historian and is not provided by CNKI.
+   - **SrcDatabase**: Type of publication, indicating the various databases within CNKI (e.g., academic journals, master’s theses, doctoral dissertations, books, conferences).
+   - **Title**: Title of the publication.
+   - **Author**: Name of the author(s).
+   - **Affiliation**: Author's affiliated institutions.
+   - **Literature.Source**: Name of the journal or other publication outlet.
+   - **Keyword**: Primary keywords associated with the article.
+   - **Abstract**: Article abstract.
+   - **PubTime**: Date of publication.
+   - **Year**: Year of publication.
+   - **PageCount**: Page numbers, applicable to journal articles.
+   - **ISSN**: International Standard Serial Number, for books and journals.
+   - **DOI**: Digital Object Identifier, for articles.
+
+*Note*: For simplicity, the term “article” is used throughout the document to refer broadly to all scholarly works, encompassing journal articles, theses, conference papers, and other scholarly outputs.
+
+
+
+# Metadata Analysis
+
+## Distribution Over Time 
+
+```{r message = FALSE, warning = FALSE}
+
+library(hrbrthemes)
+
+# Histogram Plot
+
+cnki_liuxue %>% 
+  ggplot( aes(x=Year)) +
+  geom_histogram( binwidth=1, fill="#69b3a2", color="#e9ecef", alpha=0.9) +
+  ggtitle("Chinese Scholarship on 留学") +
+  theme_ipsum() +
+  theme(
+    plot.title = element_text(size=15)
+  ) + labs(caption = "Based on CNKI")
+
+# Black & White Plot for TCC
+
+cnki_liuxue %>%
+  ggplot(aes(x = Year)) +
+  geom_histogram(binwidth = 1, fill = "grey", color = "black", alpha = 0.9) +
+  ggtitle("Chinese Scholarship on 留学") +
+  theme_ipsum() +
+  theme(
+    plot.title = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.text = element_text(color = "black"),   # Ensure axis text is black
+    axis.title = element_text(color = "black"),  # Ensure axis title is black
+    panel.grid.major = element_line(color = "black"),  # Major grid lines in black
+    panel.grid.minor = element_line(color = "black")   # Minor grid lines in black
+  ) +
+  labs(caption = "Based on CNKI")
+
+```
+
+### Periodization 
+
+```{r message = FALSE, warning = FALSE}
+
+cnki_liuxue$Period <- cut(cnki_liuxue$Year, c(1957, 1990, 2003, 2015, 2024), include.lowest = TRUE, right = FALSE, 
+                       labels = c("1957-1989", "1990-2002", "2003-2014", "2015-2024"))
+
+cnki_liuxue %>% group_by(Period) %>% count() %>% mutate(percent = round(n/2067*100, 1))
+
+```
+
+### Distribution By Decade
+
+```{r message = FALSE, warning = FALSE}
+
+cnki_liuxue$Decade <- paste0(substr(cnki_liuxue$Year, 0, 3), "0")
+
+cnki_liuxue <- cnki_liuxue %>% relocate(Decade, .after = Year)
+
+cnki_liuxue %>% group_by(Decade) %>% count() %>% mutate(percent = round(n/2067*100, 1))
+
+```
+
+## Distribution By Category
+
+```{r message = FALSE, warning = FALSE}
+
+cnki_liuxue %>% group_by(SrcDatabase) %>% count(sort = TRUE) %>% mutate(percent = round(n/2067*100, 1))
+
+```
+
+<br> 
+### Broader Categorization 
+
+```{r message = FALSE, warning = FALSE}
+
+cnki_liuxue <- cnki_liuxue %>% 
+  mutate(type = fct_collapse(SrcDatabase,
+                             thesis = c("硕士", "博士"),
+                             journal = c("辑刊", "期刊"),
+                             newspaper = c("报纸"),
+                             conference = c("国际会议", "中国会议")
+  )) %>% relocate(type, .after = SrcDatabase)
+
+cnki_liuxue %>% group_by(type) %>% count(sort = TRUE) %>% mutate(percent = round(n/2067*100, 1))
+
+```
+
+### Categories By Period
+
+```{r message = FALSE, warning = FALSE}
+
+cnki_liuxue %>% group_by(Period, type) %>% count() %>% arrange(Period)
+cnki_liuxue %>% group_by(Period, type) %>% count() %>% arrange(type)
+
+```
+
+
+## Major Publication Outlets
+
+```{r message = FALSE, warning = FALSE}
+
+cnki_liuxue %>%
+  mutate(source = str_remove(Literature.Source, "\\s*\\(.*\\)")) %>% 
+  group_by(source) %>% count(sort = TRUE) 
+
+```
+
+## Major Research Centers (Affiliation)
+
+### All Categories 
+```{r message = FALSE, warning = FALSE}
+
+cnki_liuxue_affiliation <- cnki_liuxue %>% separate_rows(Affiliation, sep = "; ") %>% 
+  separate_rows(Affiliation, sep = "、 ") %>% 
+  separate_rows(Affiliation, sep = ", ")%>%
+  mutate(Affiliation = str_remove(Affiliation, "\\s*\\(.*\\)")) %>%
+  mutate(Affiliation = str_replace(Affiliation, ";", ""))  %>%
+  mutate(Affiliation = str_replace(Affiliation, ";", "")) %>%
+  mutate(Affiliation = str_replace(Affiliation, ";", "")) %>%
+  mutate(Affiliation = str_replace(Affiliation, "、", "")) %>%
+  mutate(Affiliation = str_replace(Affiliation, ",", ""))%>%
+  mutate(Affiliation = str_remove_all(Affiliation, "\\d")) %>%
+  mutate(Affiliation = str_replace(Affiliation, " ", ""))  %>% 
+  mutate(length = nchar(Affiliation)) %>% filter(length > 2) 
+
+cnki_liuxue_affiliation %>% group_by(Affiliation) %>% count(sort = TRUE) 
+
+```
+
+### Focus on Theses  
+
+```{r message = FALSE, warning = FALSE}
+
+cnki_liuxue_affiliation %>% filter(type == "thesis") %>% group_by(Affiliation) %>% count(sort = TRUE) # all theses
+cnki_liuxue_affiliation %>% filter(SrcDatabase == "博士") %>% group_by(Affiliation) %>% count(sort = TRUE) # doctoral dissertations only 
+
+```
+### Major Conference Organizers
+
+```{r message = FALSE, warning = FALSE}
+
+cnki_liuxue_affiliation %>% filter(type == "conference") %>% group_by(Affiliation) %>% count(sort = TRUE) 
+
+```
+
+
+## Most Prolific Authors
+
+```{r message = FALSE, warning = FALSE}
+
+# separate multiple authors (2329 rows)
+
+cnki_authors <- cnki_liuxue_affiliation %>%
+  separate_longer_delim(Author, delim = "; ") %>%
+  mutate(Author = str_replace(Author, ";", ""))
+
+cnki_authors %>% drop_na(Author) %>% group_by(Author) %>% count(sort = TRUE)
+
+
+```
+### Authors with their affiliation(s)
+
+```{r message = FALSE, warning = FALSE}
+
+cnki_authors %>% drop_na(Author) %>% group_by(Author, Affiliation) %>% count(sort = TRUE) # authors with their affiliations
+
+```
+
+# Content Analysis (Based on Titles)
+
+In this section, we aim to analyze the content of the scholarship in greater depth, identifying key concepts and examining how research topics have shifted over time. Since abstracts are not consistently provided and are sometimes incomplete, we chose to rely on the titles of the articles. While this approach is reductive and does not fully capture the entirety of the article content, it offers the most systematic information available, allowing us to include all scholarly works, even those without abstracts. 
+
+## Tokenization 
+
+The first step is to perform tokenization on the titles, that, to segment Chinese titles into words. For this prupose, we use (jiebaR)[https://github.com/qinwf/jiebaR], one of the most popular R package for Chinese word segmentation, which performs well on contemporary Chinese: 
+
+The first step is to perform tokenization on the titles, which involves segmenting Chinese titles into individual words. For this purpose, we use (jiebaR)[https://github.com/qinwf/jiebaR], one of the most popular packages for Chinese word segmentation, which is particularly effective with contemporary Chinese:
+
+```{r message = FALSE, warning = FALSE}
+
+library(jiebaR)
+
+cnki_titles <- cnki_liuxue
+
+# Initialize jiebaR worker
+cutter <- worker()
+
+# define the segmentation function 
+seg_x <- function(x) {str_c(cutter[x], collapse = " ")}
+
+# apply the function to documents 
+
+x.out <- sapply(cnki_titles$Title, seg_x, USE.NAMES = FALSE)
+
+# Attach the segmented text back to the data frame
+
+cnki_titles$Title.seg <- x.out
+
+cnki_titles <- cnki_titles %>% relocate(Title.seg, .after = Title) 
+
+# Count number of tokens in each title
+
+library(quanteda)
+library(quanteda.textstats)
+
+cnki_tokenized <- cnki_titles %>% 
+  mutate(ntoken = ntoken(Title.seg)) 
+
+# Unnest tokens (split titles into as many rows as tokens they contain)
+
+library(tidytext)
+
+cnki_tokens <- cnki_tokenized %>% 
+  unnest_tokens(output = token, 
+                input = Title.seg, 
+                token = stringr::str_split, 
+                pattern = " ") # 16,217 observations
+
+# Count number of occurrences for each token 
+
+cnki_token_count <- cnki_tokens %>% group_by(token) %>% count() %>% mutate(lgth = nchar(token)) # 3,389 unique tokens
+
+# Remove non-Chinese tokens (numbers, punctuation) and retain only tokens with two or more characters
+
+cnki_token_filtered <- cnki_token_count %>% filter(lgth >1) %>% 
+  mutate(token = str_replace_all(token, "[:digit:]", "")) %>% 
+  mutate(token = str_replace_all(token, "[[:punct:]]", " "))  
+
+cnki_token_filtered[cnki_token_filtered==""]<-NA
+cnki_token_filtered[cnki_token_filtered==" "]<-NA
+cnki_token_filtered[cnki_token_filtered=="  "]<-NA
+
+cnki_token_filtered <- cnki_token_filtered %>% 
+  drop_na(token) 
+
+# 2,840 unique tokens remain
+
+# Filter out irrelevant tokens from the dataset of tokenized titles （16,217 observations remain)
+
+cnki_titles_filtered <- cnki_tokens %>% filter(token %in% c(cnki_token_filtered$token))
+
+# Most frequent tokens 
+
+cnki_titles_filtered %>% group_by(token) %>% count(sort = TRUE) 
+
+
+```
+
+## Stopword Filtering
+
+To improve the quality of our text analysis, we need to remove stopwords—tokens that are overly frequent in the Chinese language in general and within the specific context of scholarship and the topic of study abroad. For example, we will eliminate terms like "中国" (*Zhongguo*, China) and the keywords used in the initial query (留学, *liuxue*), as well as common scholarly terms such as "研究" (*yanjiu*, research).
+
+For general stopwords, we utilize dictionaries created by previous users, such as those available through the [stopwords](https://cran.r-project.org/web/packages/stopwords/readme/README.html) R package. For customized stopwords, we employ a carefully curated list based on the frequency of words extracted from this dataset.
+
+### General Stopwords
+```{r message = FALSE, warning = FALSE}
+
+library(stopwords)
+
+# list existing dictionaries and languages: 3 sources for Chinese: 
+stopwords::stopwords_getsources()
+stopwords::stopwords_getlanguages("marimo") # 2 types of Chinese : zh_tw (Taiwan) and zh_cn (mainland Chinese)
+stopwords::stopwords_getlanguages("stopwords-iso")
+stopwords::stopwords_getlanguages("misc")
+
+# extract stopwords from different dictionaries
+
+zh_iso_stopwords <- stopwords(language = "zh", source = "stopwords-iso")
+zh_marimo_tw <- stopwords(language = "zh_tw", source = "marimo")
+zh_misc <- stopwords(language = "zh", source = "misc")
+
+stop_iso <- as.data.frame(zh_iso_stopwords)
+stop_iso <- stop_iso %>% mutate(word = zh_iso_stopwords)
+stop_iso$zh_iso_stopwords <- NULL
+
+stop_marimo <- as.data.frame(zh_marimo_tw)
+stop_marimo <- stop_marimo %>% mutate(word = zh_marimo_tw)
+stop_marimo$zh_marimo_tw <- NULL
+
+stop_misc <- as.data.frame(zh_misc)
+stop_misc <- stop_misc %>% mutate(word = zh_misc)
+stop_misc$zh_misc <- NULL
+
+# Combine stopwords from different sources
+
+all_stop_words <- bind_rows(stop_iso, stop_marimo, stop_misc) %>% unique()
+
+# Remove stop words from our dataset of tokenized titles 
+
+cnki_token_filtered <- cnki_token_filtered %>% filter(!token %in% all_stop_words$word) # 2,807 unique tokens remain
+
+cnki_titles_filtered <- cnki_titles_filtered %>% filter(!token %in% all_stop_words$word) # 12,057 titles remain
+
+```
+
+### Specific Stopwords
+
+```{r message = FALSE, warning = FALSE}
+
+library(readr)
+cnki_title_stopword_list <- read_csv("cnki_title_stopword_list.csv", 
+    col_types = cols(...1 = col_skip()))
+
+cnki_token_filtered <- cnki_token_filtered %>% filter(!token %in% cnki_title_stopword_list$token) # 2,764 tokens remain
+
+cnki_titles_filtered <- cnki_titles_filtered %>% filter(!token %in% cnki_title_stopword_list$token) # 9,679 titles remain
+
+```
+
+## TF-IDF
+
+In the next step, we use **Term Frequency-Inverse Document Frequency (TF-IDF)**  by period to identify the key terms for each period identified [above](#Periodization) TF-IDF is a statistical measure used to evaluate the importance of a word in a document relative to a collection of documents. It considers how frequently the word appears in the document compared to its overall frequency across the corpus.
+
+The plots below display the seven most frequent words for each period:
+```{r message = FALSE, warning = FALSE}
+
+cnki_period_tf_idf <- cnki_titles_filtered %>% 
+  count(Period, token)  %>%
+  bind_tf_idf(token, Period, n) %>%
+  arrange(desc(tf_idf))
+
+
+cnki_period_tf_idf %>% 
+  group_by(Period) %>%
+  top_n(7, tf_idf) %>%
+  ungroup() %>%
+  mutate(token = reorder(token, tf_idf)) %>%
+  ggplot(aes(tf_idf, token, fill = Period)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ Period, scales = "free", nrow = 3) +
+  labs(x = "tf-idf", y = "token", 
+       title = "Highest tf-idf words in CNKI titles", 
+       subtitle = "tf-idf by period", 
+       caption = "Source: CNKI (1957-2024)")
+
+# Black and white plot for TCC
+
+cnki_period_tf_idf %>% 
+  group_by(Period) %>%
+  top_n(7, tf_idf) %>%
+  ungroup() %>%
+  mutate(token = reorder(token, tf_idf)) %>%
+  ggplot(aes(tf_idf, token)) +  # Remove fill aesthetic
+  geom_col(aes(fill = Period), show.legend = FALSE) +  # Optional if you want different shades
+  facet_wrap(~ Period, scales = "free", nrow = 3) +
+  labs(x = "tf-idf", y = "token", 
+       title = "Highest tf-idf words in CNKI titles", 
+       subtitle = "tf-idf by period", 
+       caption = "Source: CNKI (1957-2024)") +
+  theme_bw(base_size = 12) +  # Use a black-and-white theme
+  scale_fill_grey()  # Use grey scale for the fill if desired
+
+```
+<br>
+To inspect the representative articles associated with each of the top words for Period 3, for instance, you can use the following line of code:
+```{r}
+
+p3_top <- cnki_period_tf_idf %>% 
+  filter(Period == "2003-2014") %>% group_by(Period) %>%
+  top_n(7, tf_idf)
+
+p3_top_articles <- cnki_titles_filtered %>% 
+  filter(Period == "2003-2014") %>% filter(token %in% p3_top$token)
+
+p3_top_articles %>% distinct(id, SrcDatabase, Title, Author)
+
+```
+### Comparative Studies
+
+We can use the term "比较" (*bijiao*, compare) to identify comparative studies: 
+
+```{r message = FALSE, warning = FALSE}
+
+cnki_comparative <- cnki_titles_filtered %>% filter(token == "比较") %>% unique() # 30 comparative studies
+
+cnki_comparative
+
+```
+
+
+## Co-Occurrence Network
+
+In the next step, we build a co-occurrence network to examine the words that most often appear together in article titles and identify the most central terms in this semantic constellation. We use **pairwise counting** to compute the strength of ties between pairs of words. Pairwise counting indicates how often specific words appear in the same title, providing insights into their co-occurrence patterns and potential semantic relationships. 
+
+```{r message = FALSE, warning = FALSE}
+
+## Compute pairwise count 
+
+library(widyr) 
+
+word_pairs <- cnki_titles_filtered %>%
+  pairwise_count(token, id, sort = TRUE) 
+
+# Create the co-occurrence network 
+
+set.seed(2024)
+
+library(igraph)
+library(tidygraph)
+library(ggraph)
+
+word_pairs %>%
+  filter(n > 5) %>%
+  graph_from_data_frame() %>%
+  { 
+    # Calculate betweenness centrality
+    betweenness_centrality <- betweenness(., normalized = TRUE)
+    
+    # Add betweenness centrality as a node attribute
+    V(.)$betweenness <- betweenness_centrality
+    
+    # Create the graph with betweenness-based node sizes and label sizes
+    ggraph(., layout = "fr") +
+      geom_edge_link(aes(edge_alpha = n), show.legend = FALSE) +
+      geom_node_point(aes(size = betweenness), color = "orange") + # Use betweenness for node size
+      geom_node_text(aes(label = name, size = betweenness), 
+                     repel = TRUE, 
+                     point.padding = unit(0.2, "lines")) + # Use betweenness for label size
+      theme_void() +
+      labs(title = "Word co-occurrences in article titles focused on 留学", 
+           subtitle = "Most frequent pairs (n > 5)", 
+           caption = "Source: CNKI") +
+      scale_size_continuous(range = c(2, 8)) + # Adjust the size range for nodes
+      scale_size_continuous(name = "Betweenness Centrality", range = c(2, 8)) # Adjust the size range for labels
+  }
+
+
+```
+<br>
+In the graph above, the size of each node is proportionate to its **betweenness centrality**. In the analysis of co-occurrence networks, betweenness centrality helps identify words or terms that serve as central points of connection, highlighting their significance in the semantic structure (in this particular context, the scholarship on study abroad) and the relationships between different concepts.
+
+### Two-Mode Network
+
+To facilitate the exploration and contextualization of semantic relations, it is helpful to create a two-mode network that links words to the titles in which they appear, along with their associated metadata. A **two-mode network** is a type of network that represents relationships between two distinct sets of entities — such as, in this context, words and the titles in which they appear.
+
+```{r message = FALSE, warning = FALSE}
+
+# create edge list linking words (tokens) and article titles
+
+edge_titles <- cnki_titles_filtered %>% select(id, token)
+edge_titles <- edge_titles %>% unique()
+
+# create node list to differentiate token and titles, and list of attributes (metadata) for articles
+
+title_node <- edge_titles %>% select(id) %>% mutate(type = "Title") %>% unique() %>% rename(name = id)
+word_node <- edge_titles %>% select(token) %>% mutate(type = "Word") %>% unique() %>% rename(name = token)
+title_node <- title_node %>% mutate(name = as.character(name))
+node_titles <- bind_rows(title_node, word_node)
+node_titles <- node_titles %>% unique()
+
+# create attribute list for title nodes (article metadata)
+
+node_attributes <- cnki_titles_filtered %>% distinct(id, SrcDatabase, type, Title, Author, Affiliation, Literature.Source, Year, Period)
+
+# export the edge and node lists to project in a network analysis software, such as Gephi or Cytoscape 
+# write.csv(edge_titles, "edge_titles.csv")
+# write.csv(node_titles, "node_titles.csv")
+# write.csv(node_attributes, "node_attribute.csv")
+```
+
+
+## Biterm Topic Modeling 
+
+This section relies on a more sophisticated method called **topic modeling** to identify key topics in the scholarship based on word co-occurrences in titles. Topic modeling is a natural language processing technique used to automatically identify and extract themes or topics from a collection of documents by analyzing word co-occurrences and patterns, typically represented in a probabilistic framework. In this study, we specifically utilized **biterm topic modeling** (BTM), which focuses on pairs of words and is particularly suitable for short texts like article titles. In the first step, we build different models for the entire corpus, with the number of topics ranging from 5 to 50 to enable different levels of granularity. In the second step, we construct topic models for each period to study how the topical focus changes over time.
+
+### Granular Topic Modeling
+```{r message = FALSE, warning = FALSE, eval = FALSE}
+
+# Not run here 
+
+library(BTM)
+
+x <- cnki_titles_filtered %>% select(id, token)
+
+set.seed(2024)
+model5  <- BTM(x, k = 5, beta = 0.01, iter = 1000, trace = 100)
+model10  <- BTM(x, k = 10, beta = 0.01, iter = 1000, trace = 100)
+model15  <- BTM(x, k = 15, beta = 0.01, iter = 1000, trace = 100)
+model20  <- BTM(x, k = 20, beta = 0.01, iter = 1000, trace = 100)
+model25  <- BTM(x, k = 25, beta = 0.01, iter = 1000, trace = 100)
+model50  <- BTM(x, k = 50, beta = 0.01, iter = 1000, trace = 100)
+
+```
+
+### Period-Based Topic Modeling
+
+```{r message = FALSE, warning = FALSE}
+
+# Create dataset for each period
+
+x1 <- cnki_titles_filtered %>% filter(Period == "1957-1989") %>% select(id, token)
+x2 <- cnki_titles_filtered %>% filter(Period == "1990-2002") %>% select(id, token)
+x3 <- cnki_titles_filtered %>% filter(Period == "2003-2014") %>% select(id, token)
+x4 <- cnki_titles_filtered %>% filter(Period == "2015-2024") %>% select(id, token)
+
+library(BTM)
+
+set.seed(2024)
+modelp1  <- BTM(x1, k = 5, beta = 0.01, iter = 1000, trace = 100)
+modelp2  <- BTM(x2, k = 10, beta = 0.01, iter = 1000, trace = 100)
+modelp3  <- BTM(x3, k = 20, beta = 0.01, iter = 1000, trace = 100)
+modelp4  <- BTM(x4, k = 15, beta = 0.01, iter = 1000, trace = 100)
+
+# Plot the topics
+
+library(textplot)
+library(ggraph)
+library(concaveman)
+
+# Period 1
+
+plot(modelp1, top_n = 10, 
+     title = "CNKI articles on 留学 (1957-1989)", 
+     subtitle = "Biterm topic model with 5 topics") +   
+  theme_minimal(base_size = 12) + 
+  labs(edge_color = "Topic",                              # Change label for edge color to "Topic"
+       edge_alpha = "Cooccurrence Strength",    
+       edge_width = "Cooccurrence Strength", 
+       size = "Word Probability", 
+       group = "Topic", 
+       fill = "Topic", # Change label for edge width to "Cooccurrence Strength"
+       title = "CNKI articles on 留学 (1957-1989)", 
+       subtitle = "Biterm topic model with 5 topics") +                  
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 10),
+        axis.title = element_blank(),  # Remove axis titles
+        axis.text = element_blank(), 
+        panel.background = element_rect(fill = "white"), # Remove axis text
+        axis.ticks = element_blank()) + # Remove axis ticks
+  guides(edge_color = "none")
+
+
+# Period 2
+
+plot(modelp2, top_n = 10, 
+     title = "CNKI articles on 留学 (1990-2002)", 
+     subtitle = "Biterm topic model with 10 topics") +   
+  theme_minimal(base_size = 12) + 
+  labs(edge_color = "Topic",                              # Change label for edge color to "Topic"
+       edge_alpha = "Cooccurrence Strength",    
+       edge_width = "Cooccurrence Strength", 
+       size = "Word Probability", 
+       group = "Topic", 
+       fill = "Topic", # Change label for edge width to "Cooccurrence Strength"
+       title = "CNKI articles on 留学 (1990-2002)", 
+       subtitle = "Biterm topic model with 10 topics") +                  
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 10),
+        axis.title = element_blank(),  # Remove axis titles
+        axis.text = element_blank(), 
+        panel.background = element_rect(fill = "white"), # Remove axis text
+        axis.ticks = element_blank()) + # Remove axis ticks
+  guides(edge_color = "none", 
+         fill = guide_legend(ncol = 2))
+
+
+plot(modelp3, top_n = 10, 
+     title = "CNKI articles on 留学 (2003-2014)", 
+     subtitle = "Biterm topic model with 20 topics") +   
+  theme_minimal(base_size = 12) + 
+  labs(edge_color = "Topic",                              # Change label for edge color to "Topic"
+       edge_alpha = "Cooccurrence Strength",    
+       edge_width = "Cooccurrence Strength", 
+       size = "Word Probability", 
+       group = "Topic", 
+       fill = "Topic", 
+       title = "CNKI articles on 留学 (2003-2014)", 
+       subtitle = "Biterm topic model with 20 topics") +                  
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 10),
+        axis.title = element_blank(),  # Remove axis titles
+        axis.text = element_blank(), 
+        panel.background = element_rect(fill = "white"), # Remove axis text
+        axis.ticks = element_blank()) + # Remove axis ticks
+  guides(edge_color = "none", 
+         fill = guide_legend(ncol = 2))  # Set fill legend to 2 columns
+
+
+plot(modelp4, top_n = 10, 
+     title = "CNKI articles on 留学 (2015-2024)", 
+     subtitle = "Biterm topic model with 15 topics") +   
+  theme_minimal(base_size = 12) + 
+  labs(edge_color = "Topic",                              # Change label for edge color to "Topic"
+       edge_alpha = "Cooccurrence Strength",    
+       edge_width = "Cooccurrence Strength", 
+       size = "Word Probability", 
+       group = "Topic", 
+       fill = "Topic", 
+       title = "CNKI articles on 留学 (2015-2024)", 
+       subtitle = "Biterm topic model with 15 topics") +                  
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 10),
+        axis.title = element_blank(),  # Remove axis titles
+        axis.text = element_blank(), 
+        panel.background = element_rect(fill = "white"), # Remove axis text
+        axis.ticks = element_blank()) + # Remove axis ticks
+  guides(edge_color = "none", 
+         fill = guide_legend(ncol = 3))
+
+
+
+```
+
+
+### Retrieve Topic Proportions
+
+```{r message = FALSE, warning = FALSE}
+# Load required libraries
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(tidyr)
+library(tidyverse)
+
+# Function to plot topic distributions
+plot_topic_distributions <- function(model, num_topics) {
+  # Extract term-topic matrix
+  term_topic_matrix <- model$phi  # This is typically the term-topic distribution
+  
+  # Convert to a data frame for easier manipulation
+  term_topic_df <- as.data.frame(term_topic_matrix)
+  
+  # Add topic labels
+  colnames(term_topic_df) <- paste0("Topic", 1:ncol(term_topic_df))
+  term_topic_df$Term <- rownames(term_topic_df)
+  
+  # Melt the data frame
+  term_topic_melted <- melt(term_topic_df, id.vars = "Term")
+  
+  # Get the top 5 terms for each topic
+  top_terms <- term_topic_melted %>%
+    group_by(variable) %>%
+    top_n(5, value) %>%
+    arrange(variable, desc(value)) %>%
+    ungroup()
+  
+  # Create a label for each topic
+  top_terms_labels <- top_terms %>%
+    group_by(variable) %>%
+    summarize(label = paste(Term, collapse = ", ")) %>%
+    ungroup()
+  
+  # Prepare topic proportions data
+  theta <- as.data.frame(model$theta)
+  theta <- theta %>% rowid_to_column("id")
+  theta <- theta %>% rename(value = `model$theta`)
+  
+  # Join the top terms with your topic proportions data frame
+  top_terms_labels <- rowid_to_column(top_terms_labels, "id")
+  topic_proportions_melted <- left_join(top_terms_labels, theta)
+  topic_proportions_melted <- topic_proportions_melted %>% rename(Topic = variable)
+  
+  topic_proportions_melted <- topic_proportions_melted %>% 
+    mutate(topiclabel = paste(Topic, label, sep = "_"))
+  
+  # Generate the plot
+  ggplot(topic_proportions_melted, aes(x = reorder(Topic, value), y = value, fill = as.factor(Topic))) +
+    geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +  # Use dodge width
+    labs(title = paste("Topic Proportions in the Model with", num_topics, "Topics"),
+         subtitle = paste("BTM", num_topics, "-Topic Model"),
+         x = "Topic",
+         y = "Proportion",
+         caption = "Based on CNKI") + 
+    coord_flip() +  # Flipping coordinates to have horizontal bars
+    theme_minimal() +
+    theme(legend.position = "bottom", 
+          legend.box = "vertical") +  # Position legend below the plot
+    guides(fill = guide_legend(title = "Top Terms", ncol = 3)) +  # Cutomize the distribution of columns
+    scale_fill_manual(values = rainbow(num_topics),  # Dynamic colors based on number of topics
+                      labels = topic_proportions_melted$topiclabel) 
+  }
+
+# Example usage for different models (example with period 4)
+
+plot_topic_distributions(modelp4, 15)
+
+# Black and White Plot for TCC
+
+# Load required libraries
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(tidyr)
+
+# Function to plot topic distributions in black and white
+plot_topic_distributions_bw <- function(model, num_topics) {
+  # Extract term-topic matrix
+  term_topic_matrix <- model$phi  # This is typically the term-topic distribution
+  
+  # Convert to a data frame for easier manipulation
+  term_topic_df <- as.data.frame(term_topic_matrix)
+  
+  # Add topic labels
+  colnames(term_topic_df) <- paste0("Topic", 1:ncol(term_topic_df))
+  term_topic_df$Term <- rownames(term_topic_df)
+  
+  # Melt the data frame
+  term_topic_melted <- melt(term_topic_df, id.vars = "Term")
+  
+  # Get the top 5 terms for each topic
+  top_terms <- term_topic_melted %>%
+    group_by(variable) %>%
+    top_n(5, value) %>%
+    arrange(variable, desc(value)) %>%
+    ungroup()
+  
+  # Create a label for each topic
+  top_terms_labels <- top_terms %>%
+    group_by(variable) %>%
+    summarize(label = paste(Term, collapse = ", ")) %>%
+    ungroup()
+  
+  # Prepare topic proportions data
+  theta <- as.data.frame(model$theta)
+  theta <- theta %>% rowid_to_column("id")
+  theta <- theta %>% rename(value = `model$theta`)
+  
+  # Join the top terms with your topic proportions data frame
+  top_terms_labels <- rowid_to_column(top_terms_labels, "id")
+  topic_proportions_melted <- left_join(top_terms_labels, theta)
+  topic_proportions_melted <- topic_proportions_melted %>% rename(Topic = variable)
+  
+  topic_proportions_melted <- topic_proportions_melted %>% 
+    mutate(topiclabel = paste(Topic, label, sep = "_"))
+  
+  # Generate the black and white plot
+  ggplot(topic_proportions_melted, aes(x = reorder(Topic, value), y = value, fill = as.factor(Topic))) +
+    geom_bar(stat = "identity", position = position_dodge(width = 0.9), color = "black") +  # Black outline for bars
+    labs(title = paste("Topic Proportions in the Model with", num_topics, "Topics"),
+         subtitle = paste("BTM", num_topics, "-Topic Model"),
+         x = "Topic",
+         y = "Proportion",
+         caption = "Based on CNKI") + 
+    coord_flip() +  # Flipping coordinates to have horizontal bars
+    theme_minimal(base_size = 12) +  # Increased base font size for better readability
+    theme(legend.position = "bottom", 
+          legend.box = "vertical",
+          panel.grid.major = element_line(color = "gray80"),  # Light gray grid lines for visibility
+          panel.grid.minor = element_blank()) +  # No minor grid lines
+    guides(fill = guide_legend(title = "Top Terms", ncol = 3)) +  # Position legend below the plot
+    scale_fill_grey(start = 0.3, end = 0.9, labels = topic_proportions_melted$topiclabel)  # Grayscale colors
+}
+
+# Example usage for different models
+
+plot_topic_distributions_bw(modelp4, 15)
+
+```
+
+
+### Retrieve Word Probabilities 
+
+```{r message = FALSE, warning = FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(janitor)
+
+
+# Define a function to extract and plot top terms for a given model and number of topics
+plot_top_terms <- function(model, num_topics, top_n = 5) {
+  
+  # Get word-topic probabilities
+  beta <- model[["phi"]]
+  beta <- as.data.frame(beta)
+  beta <- rownames_to_column(beta, "Term")
+  
+  # Rename columns based on number of topics
+  colnames(beta)[2:(num_topics + 1)] <- paste0("Topic", 1:num_topics)
+  
+  # Reshape the data to long format
+  beta_long <- beta %>%
+    pivot_longer(cols = starts_with("Topic"), names_to = "Topic", values_to = "Probability")
+  
+  # Filter to get the top N terms per topic
+  beta_top_n <- beta_long %>%
+    group_by(Topic) %>%
+    slice_max(Probability, n = top_n) %>%  # Keep only top N terms per topic
+    ungroup()
+  
+  # Create the bar plot with coord_flip, showing only the top N terms for each topic
+  ggplot(beta_top_n, aes(x = reorder(Term, Probability), y = Probability, fill = Topic)) +
+    geom_bar(stat = "identity", show.legend = FALSE) +
+    facet_wrap(~ Topic, scales = "free_y") +  # Adjust scales for the flipped layout
+    labs(x = "Term", y = "Probability (Beta)", title = paste("Top", top_n, "Terms for Each Topic (", num_topics, "Topics)", sep = "")) +
+    theme_minimal() +
+    coord_flip() +  # Flips the coordinates to make the bars horizontal
+    theme(axis.text.y = element_text(angle = 45, hjust = 1))  # Adjust text for y-axis (previously x-axis)
+  }
+
+# Example of using the function for different models (example with period 4)
+plot_top_terms(modelp4, 15)
+
+
+# Black and White Plot 
+
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(janitor)
+
+# Define a function to extract and plot top terms for a given model and number of topics
+plot_top_terms_bw <- function(model, num_topics, top_n = 5) {
+  
+  # Get word-topic probabilities
+  beta <- model[["phi"]]
+  beta <- as.data.frame(beta)
+  beta <- rownames_to_column(beta, "Term")
+  
+  # Rename columns based on number of topics
+  colnames(beta)[2:(num_topics + 1)] <- paste0("Topic", 1:num_topics)
+  
+  # Reshape the data to long format
+  beta_long <- beta %>%
+    pivot_longer(cols = starts_with("Topic"), names_to = "Topic", values_to = "Probability")
+  
+  # Filter to get the top N terms per topic
+  beta_top_n <- beta_long %>%
+    group_by(Topic) %>%
+    slice_max(Probability, n = top_n) %>%  # Keep only top N terms per topic
+    ungroup()
+  
+  # Create the black and white bar plot
+  ggplot(beta_top_n, aes(x = reorder(Term, Probability), y = Probability)) +
+    geom_bar(stat = "identity", fill = "gray40", color = "black", show.legend = FALSE) +  # Gray fill with black outline
+    facet_wrap(~ Topic, scales = "free_y") +  # Adjust scales for the flipped layout
+    labs(x = "Term", y = "Probability (Beta)", 
+         title = paste("Top", top_n, "Terms for Each Topic (", num_topics, "Topics)", sep = "")) +
+    theme_minimal(base_size = 12) +  # Increased base font size for better readability
+    coord_flip() +  # Flips the coordinates to make the bars horizontal
+    theme(axis.text.y = element_text(angle = 45, hjust = 1),  # Adjust text for y-axis
+          panel.grid.major = element_line(color = "gray80"),  # Light gray grid lines for visibility
+          panel.grid.minor = element_blank())  # No minor grid lines
+}
+
+# Example of using the function for different models
+
+plot_top_terms_bw(modelp4, 15)
+
+```
+
+
+### Retrieve Representative Articles 
+
+```{r message = FALSE, warning = FALSE}
+# Load necessary libraries
+library(BTM)
+library(dplyr)
+
+# Function to retrieve document-topic distribution
+get_document_topic_distribution <- function(model, x, titles_df, model_num) {
+  # Predicting document-topic distributions
+  sum_b <- predict(model, newdata = x, type = "sum_b")
+  sub_w <- predict(model, newdata = x, type = "sub_w")
+  mix <- predict(model, newdata = x, type = "mix")
+  
+  # Convert predictions to data frames and add an 'id' column
+  sum_b_df <- as.data.frame(sum_b) %>% rowid_to_column("id")
+  sub_w_df <- as.data.frame(sub_w) %>% rowid_to_column("id")
+  mix_df <- as.data.frame(mix) %>% rowid_to_column("id")
+  
+  # Rename columns to Topic1, Topic2, ..., TopicN
+  colnames(sum_b_df)[-1] <- paste0("Topic", 1:(ncol(sum_b_df) - 1))
+  colnames(sub_w_df)[-1] <- paste0("Topic", 1:(ncol(sub_w_df) - 1))
+  colnames(mix_df)[-1] <- paste0("Topic", 1:(ncol(mix_df) - 1))
+  
+  # Join with titles
+  sum_b_df <- left_join(sum_b_df, titles_df, by = "id")
+  sub_w_df <- left_join(sub_w_df, titles_df, by = "id")
+  mix_df <- left_join(mix_df, titles_df, by = "id")
+  
+  # Return the results as a list
+  return(list(
+    sum_b = sum_b_df,
+    sub_w = sub_w_df,
+    mix = mix_df
+  ))
+}
+
+# Example usage for different models
+
+modelp1_results <- get_document_topic_distribution(modelp1, x1, cnki_titles, 5)
+modelp2_results <- get_document_topic_distribution(modelp2, x2, cnki_titles, 10)
+modelp3_results <- get_document_topic_distribution(modelp3, x3, cnki_titles, 20)
+modelp4_results <- get_document_topic_distribution(modelp4, x4, cnki_titles, 15)
+
+# Accessing the results
+modelp4_sum_b <- modelp4_results$sum_b
+modelp4_sub_w <- modelp4_results$sub_w
+modelp4_mix <- modelp4_results$mix
+
+modelp4_mix
+
+```
+
+
+# Named Entity Recognition (NER)
+
+In the final section, we employ **Named Entity Recognition (NER)** — a well-established technique in Natural Language Processing that identifies names of persons, organizations, locations, and other named entities in text corpora. We use the [histtext](https://bookdown.enpchina.eu/HistText_Book/) R package, specifically the [**ner_on_df()**](https://bookdown.enpchina.eu/HistText_Book/named-entity-recognition-ner.html#ner-on-external-documents) function developed by the "Elites, Networks, and Power in modern China" [(ENP-China)]( https://www.enpchina.eu/) project. 
+
+```{r message = FALSE, warning = FALSE}
+
+# Retrieve Named Entities using the histtext package 
+
+library(histtext)
+
+cnki_ner <- ner_on_df(cnki_liuxue, text_column = "Title", id_column = "id", model = "spacy:zh:ner")
+cnki_ner %>% group_by(Type) %>% count(sort = TRUE) # 38763
+
+
+```
+
+
+## Persons
+
+
+```{r message = FALSE, warning = FALSE}
+
+cnki_pers <- cnki_ner %>% filter(Type == "PERSON") 
+
+# remove non Han characters 
+
+cnki_pers_clean <- cnki_pers %>% select(id, Text) %>% mutate(Text_clean = str_replace_all(Text, "[^\\p{Han}]", ""))
+
+# replace empty strings with NA
+
+cnki_pers_clean$Text_clean[cnki_pers_clean$Text_clean == ""] <- NA
+
+cnki_pers_clean <- cnki_pers_clean %>% drop_na(Text_clean)
+cnki_pers_clean <- cnki_pers_clean %>% unique() # 521 remain
+
+cnki_pers_clean_filtered <- cnki_pers_clean %>% mutate(lgth = nchar(Text_clean)) %>% filter(lgth >1) 
+cnki_pers_clean_filtered <- cnki_pers_clean_filtered %>% filter(lgth <7)  # 474 entities remain
+
+cnki_pers_clean_filtered %>% distinct(id, Text_clean) %>% group_by(Text_clean) %>% count()
+
+
+```
+
+### Persons Over Time
+
+```{r message = FALSE, warning = FALSE}
+
+id_period <- cnki_liuxue %>% select(id, Year, Period)
+
+### Join Entities with Article Metadata 
+
+cnki_pers_period <- left_join(cnki_pers_clean_filtered, id_period)
+
+### Compute and Plot Persons by Period 
+
+cnki_pers_period %>% group_by(Period) %>% count()
+
+cnki_pers_period %>%
+  group_by(Period, Text_clean) %>% 
+  count() %>%
+  group_by(Period) %>%  # Group by Period to ensure top_n is applied per group
+  top_n(5, n) %>%  # Select the top 5 within each Period group
+  ungroup() %>%  # Select the top 5 within each Period group
+  mutate(Text_clean = reorder(Text_clean, n)) %>%
+  ggplot(aes(n, Text_clean, fill = Period)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ Period, scales = "free", nrow = 2) +
+  labs(x = "Frequency", y = "Persons", 
+       title = "Most popular characters mentioned in CNKI titles", 
+       subtitle = "Frequency by period", 
+       caption = "Source: CNKI (1957-2024)")
+```
+
+
+## Events
+
+```{r message = FALSE, warning = FALSE}
+
+cnki_event <- cnki_ner %>% filter(Type == "EVENT") 
+
+# remove punctuation signs, special characters and non Chinese characters
+
+cnki_event_clean <- cnki_event %>% 
+  mutate(Text_clean = str_replace_all(Text, "[[:punct:]@#$%^&*()_+=]", "")) %>% 
+  mutate(Text_clean = str_extract(Text_clean, "[\u4e00-\u9fff]+"))  %>% 
+  mutate(lgth = nchar(Text_clean))  %>% 
+  select(id, Type, Text, Text_clean, lgth)
+
+cnki_event_clean %>% group_by(Text_clean) %>% count(sort = TRUE)
+
+
+```
+
+### Events Over Time
+
+```{r message = FALSE, warning = FALSE}
+
+### Join Entities with Article Metadata 
+
+cnki_evt_period <- left_join(cnki_event_clean, id_period) 
+
+### Compute and Plots Events by period 
+
+cnki_evt_period %>% group_by(Period) %>% count()
+
+cnki_evt_period %>%
+  group_by(Period, Text_clean) %>% 
+  count() %>%
+  group_by(Period) %>%  # Group by Period to ensure top_n is applied per group
+  top_n(5, n) %>%  # Select the top 5 within each Period group
+  ungroup() %>%  # Select the top 5 within each Period group
+  mutate(Text_clean = reorder(Text_clean, n)) %>%
+  ggplot(aes(n, Text_clean, fill = Period)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ Period, scales = "free", nrow = 2) +
+  labs(x = "Frequency", y = "Events", 
+       title = "Most popular events mentioned in CNKI titles", 
+       subtitle = "Frequency by period", 
+       caption = "Source: CNKI (1957-2024)")
+
+```
+
+## Locations
+
+```{r message = FALSE, warning = FALSE}
+
+cnki_loc <- cnki_ner %>% filter(Type %in% c("LOC", "GPE")) 
+
+
+# remove punctuation signs, special characters and non Chinese characters
+
+cnki_loc_clean <- cnki_loc %>% 
+  mutate(Text_clean = str_replace_all(Text, "[[:punct:]@#$%^&*()_+=]", "")) %>% 
+  mutate(Text_clean = str_extract(Text_clean, "[\u4e00-\u9fff]+"))  %>% 
+  mutate(lgth = nchar(Text_clean))  %>% 
+  select(id, Type, Text, Text_clean, lgth)
+
+cnki_loc_filtered <- cnki_loc_clean %>% filter(lgth >1) 
+
+cnki_loc_filtered %>% group_by(Text_clean) %>% count(sort = TRUE)
+
+
+```
+
+### Locations Over Time
+
+```{r message = FALSE, warning = FALSE}
+
+id_period <- cnki_liuxue %>% select(id, Year, Period)
+
+### Join Entities with Article Metadata 
+
+cnki_loc_period <- left_join(cnki_loc_filtered, id_period)
+
+### Compute and Plot Locations by Period 
+
+cnki_loc_period %>% group_by(Period) %>% count()
+
+cnki_loc_period %>%
+  group_by(Period, Text_clean) %>% 
+  count() %>%
+  group_by(Period) %>%  # Group by Period to ensure top_n is applied per group
+  top_n(5, n) %>%  # Select the top 5 within each Period group
+  ungroup() %>%  # Select the top 5 within each Period group
+  mutate(Text_clean = reorder(Text_clean, n)) %>%
+  ggplot(aes(n, Text_clean, fill = Period)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ Period, scales = "free", nrow = 2) +
+  labs(x = "Frequency", y = "Events", 
+       title = "Most popular places mentioned in CNKI titles", 
+       subtitle = "Frequency by period", 
+       caption = "Source: CNKI (1957-2024)")
+
+```
+
+<br>
+
+NER further highlights previously observed patterns in the scholarship on study abroad. Specifically, the extraction of names underscores the predominantly biographical focus of the scholarship on famous returned students and key figures of modernizers. The extraction of locations and geopolitical entities (GPE) confirms the emphasis on Japan and American-returned students, while the extraction of events underscores the focus on key political events — particularly the 1911 Revolution and the resistance against imperialism—which have significantly influenced our understanding of returned students as key actors in China’s major transformations, emphasizing their critical roles as either "patriots" or "traitors".
+

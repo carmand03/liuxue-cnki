@@ -991,7 +991,7 @@ In the final section, we employ **Named Entity Recognition (NER)** — a well-es
 
 library(histtext)
 
-cnki_ner <- ner_on_df(cnki_liuxue, text_column = "Title", id_column = "id", model = "spacy:zh:ner")
+cnki_ner <- ner_on_df(cnki_liuxue, text_column = "Title", id_column = "id", model = "spacy:zh:ner", verbose = FALSE)
 cnki_ner %>% group_by(Type) %>% count(sort = TRUE) # 38763
 
 

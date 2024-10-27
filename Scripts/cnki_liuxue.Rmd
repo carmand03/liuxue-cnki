@@ -154,7 +154,7 @@ cnki_liuxue %>% group_by(SrcDatabase) %>% count(sort = TRUE) %>% mutate(percent 
 
 ```
 
-<br> 
+
 ### Broader Categorization 
 
 ```{r message = FALSE, warning = FALSE}
@@ -258,7 +258,7 @@ In this section, we aim to analyze the content of the scholarship in greater dep
 
 ## Tokenization 
 
-The first step is to perform tokenization on the titles, that, to segment Chinese titles into words. For this prupose, we use (jiebaR)[https://github.com/qinwf/jiebaR], one of the most popular R package for Chinese word segmentation, which performs well on contemporary Chinese: 
+The first step is to perform tokenization on the titles, that, to segment Chinese titles into words. For this prupose, we use [jiebaR](https://github.com/qinwf/jiebaR), one of the most popular R package for Chinese word segmentation, which performs well on contemporary Chinese:
 
 The first step is to perform tokenization on the titles, which involves segmenting Chinese titles into individual words. For this purpose, we use (jiebaR)[https://github.com/qinwf/jiebaR], one of the most popular packages for Chinese word segmentation, which is particularly effective with contemporary Chinese:
 
@@ -395,7 +395,7 @@ cnki_titles_filtered <- cnki_titles_filtered %>% filter(!token %in% cnki_title_s
 
 ## TF-IDF
 
-In the next step, we use **Term Frequency-Inverse Document Frequency (TF-IDF)**  by period to identify the key terms for each period identified [above](#Periodization) TF-IDF is a statistical measure used to evaluate the importance of a word in a document relative to a collection of documents. It considers how frequently the word appears in the document compared to its overall frequency across the corpus.
+In the next step, we use **Term Frequency-Inverse Document Frequency (TF-IDF)**  by period to identify the key terms for each period identified [above](#Periodization). TF-IDF is a statistical measure used to evaluate the importance of a word in a document relative to a collection of documents. It considers how frequently the word appears in the document compared to its overall frequency across the corpus.
 
 The plots below display the seven most frequent words for each period:
 ```{r message = FALSE, warning = FALSE}
